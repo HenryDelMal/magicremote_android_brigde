@@ -81,12 +81,31 @@ If the ADB executable is on `PATH`, omit `--adb`. Use the webOS app ID for the H
 
 - Move the Magic Remote to move the Android pointer.
 - Press center to tap the item at the pointer.
+- With the optional Android keyboard helper installed, point at a key and press center. You can also use the direction buttons to highlight a key and press center to select it.
 - Use the direction buttons and Back for Android navigation.
 - Press Home to open Google TV Home.
 - Volume and Mute still control the LG TV. Channel Up and Down go to Google TV on the Chromecast HDMI input and work in apps that handle channel keys.
 - Press the LG Input or 123 button to return remote control to webOS. The bridge hands control back when the selected HDMI app is in the foreground. If the input chooser remains in front, dismiss it with Back. The bridge resumes control on the selected HDMI app.
 
 The bridge holds exclusive access to the LG remote input while the Chromecast HDMI app is active. If the bridge exits or stops renewing its input lease, the TV releases the remote.
+
+## Android keyboard pointer clicks
+
+Google TV's Gboard keyboard can ignore touchscreen taps and mouse clicks. The optional helper locates the key under the pointer and moves input focus to it before the bridge sends Center. It only inspects key bounds and never reads key labels or entered text.
+
+Build the helper with a JDK and Android SDK Platform 35 and Build Tools 36 installed. Set `ANDROID_SDK_ROOT` to the Android SDK directory, then run these commands from the repository:
+
+```sh
+build_dir="$(mktemp -d)"
+android_jar="$ANDROID_SDK_ROOT/platforms/android-35/android.jar"
+mkdir -p "$build_dir/classes" "$build_dir/dex"
+javac --release 8 -cp "$android_jar" -d "$build_dir/classes" android/ImeClick.java
+"$ANDROID_SDK_ROOT/build-tools/36.0.0/d8" --min-api 30 --lib "$android_jar" \
+  --output "$build_dir/dex" "$build_dir"/classes/*.class
+cp "$build_dir/dex/classes.dex" ime-click.dex
+```
+
+Place `ime-click.dex` alongside `magic_remote_adb.py` on the bridge host and restart the bridge. It sends the helper to Android over the existing ADB connection. Without the helper, Center selects the highlighted key while the Android keyboard is open.
 
 ## Computer bridge (optional)
 

@@ -13,7 +13,10 @@ import sys
 import threading
 import time
 import zlib
+from pathlib import Path
 
+
+IME_HELPER_DEVICE_PATH = "/data/local/tmp/magicremote-ime-click.dex"
 
 # Four-byte HID mouse report: buttons, relative X/Y, and vertical wheel.
 HID_MOUSE_REPORT_MAP = [
@@ -264,19 +267,189 @@ def renew_input_lease(remote, stop):
             return
 
 
-def tap_pointer(serial, adb_path="adb"):
-    shell = [adb_path, "-s", serial, "shell"]
-    dump = subprocess.check_output(shell + ["dumpsys", "SurfaceFlinger"], text=True, timeout=4)
+def prepare_ime_helper(serial, adb_path):
+    helper = Path(__file__).with_name("ime-click.dex")
+    if not helper.is_file():
+        return False
+    try:
+        subprocess.run(
+            [adb_path, "-s", serial, "push", str(helper), IME_HELPER_DEVICE_PATH],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=8,
+        )
+    except (OSError, subprocess.SubprocessError):
+        print("Could not load Android keyboard helper. Use D-pad selection.", file=sys.stderr)
+        return False
+    return True
+
+
+class PersistentShell:
+    """Keeps one ADB shell open for fast SurfaceFlinger cursor queries."""
+
+    def __init__(self, serial, adb_path="adb"):
+        self.serial = serial
+        self.adb_path = adb_path
+        self.proc = None
+
+    def _ensure(self):
+        if self.proc is not None and self.proc.poll() is None:
+            return
+        self.proc = subprocess.Popen(
+            [self.adb_path, "-s", self.serial, "shell", "-T"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1,
+        )
+
+    def run_lines(self, command):
+        self._ensure()
+        marker = "__END_SHELL_CMD__"
+        self.proc.stdin.write(f"{command}\necho {marker}\n")
+        self.proc.stdin.flush()
+        lines = []
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                self.close()
+                raise RuntimeError("Persistent ADB shell closed")
+            stripped = line.rstrip("\r\n")
+            if stripped == marker:
+                return lines
+            lines.append(stripped)
+
+    def close(self):
+        if self.proc is not None:
+            try:
+                if self.proc.stdin and not self.proc.stdin.closed:
+                    self.proc.stdin.close()
+                self.proc.terminate()
+                self.proc.wait(timeout=2)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            self.proc = None
+
+
+class ImeDaemon:
+    """Keeps ImeClick --daemon alive so keyboard clicks avoid ART/UiAutomation cold-starts."""
+
+    def __init__(self, serial, adb_path="adb"):
+        self.serial = serial
+        self.adb_path = adb_path
+        self.proc = None
+
+    def start(self):
+        if self.proc is not None and self.proc.poll() is None:
+            return True
+        try:
+            self.proc = subprocess.Popen(
+                [self.adb_path, "-s", self.serial, "shell", "-T",
+                 f"CLASSPATH={IME_HELPER_DEVICE_PATH} app_process / ImeClick --daemon"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, bufsize=1,
+            )
+            ready = self.proc.stdout.readline().strip()
+            if ready == "ready":
+                return True
+        except (OSError, subprocess.SubprocessError):
+            pass
+        self.close()
+        return False
+
+    def click(self, x, y, pointer_selection=True):
+        if not self.start():
+            return None
+        try:
+            self.proc.stdin.write(f"{x} {y} {1 if pointer_selection else 0}\n")
+            self.proc.stdin.flush()
+            res = self.proc.stdout.readline().strip()
+            if res in ("focused", "miss", "dpad", "no_ime"):
+                return res
+        except (OSError, subprocess.SubprocessError):
+            pass
+        self.close()
+        return None
+
+    def close(self):
+        if self.proc is not None:
+            try:
+                if self.proc.stdin and not self.proc.stdin.closed:
+                    self.proc.stdin.write("quit\n")
+                    self.proc.stdin.flush()
+                self.proc.wait(timeout=2)
+            except (OSError, subprocess.SubprocessError):
+                try:
+                    self.proc.terminate()
+                except OSError:
+                    pass
+            self.proc = None
+
+
+def query_pointer_position(serial, adb_path="adb", shell_session=None):
+    cmd = "dumpsys SurfaceFlinger | grep -B1 -A2 'parent=Sprite#' || true"
+    if shell_session is not None:
+        try:
+            dump = "\n".join(shell_session.run_lines(cmd))
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            dump = subprocess.check_output(
+                [adb_path, "-s", serial, "shell", "dumpsys", "SurfaceFlinger"],
+                text=True, timeout=4,
+            )
+    else:
+        dump = subprocess.check_output(
+            [adb_path, "-s", serial, "shell", "dumpsys", "SurfaceFlinger"],
+            text=True, timeout=4,
+        )
     positions = re.findall(
         r"layerStack=\s*0[^\n]*?pos=\((-?[0-9.]+),\s*(-?[0-9.]+)\)[^\n]*\n"
         r"\s+parent=Sprite#\d+\n[^\n]*\n[^\n]*activeBuffer=\[\s*[1-9]",
         dump,
     )
     if len(positions) != 1:
+        return None
+    # The dump reports the top-left of the cursor sprite. Aim at its hotspot.
+    return tuple(max(0, round(float(value)) + 7) for value in positions[0])
+
+
+def tap_pointer(serial, adb_path="adb", ime_helper=False, pointer_selection=True,
+                shell_session=None, ime_daemon=None):
+    if ime_helper and ime_daemon is not None:
+        if not pointer_selection:
+            res = ime_daemon.click(-1, -1, pointer_selection=False)
+            if res == "dpad":
+                return
+        pos = query_pointer_position(serial, adb_path, shell_session)
+        if pos is None:
+            print("Could not identify a single Android pointer position.", file=sys.stderr)
+            return
+        res = ime_daemon.click(pos[0], pos[1], pointer_selection=True)
+        if res is not None:
+            return
+
+    shell = [adb_path, "-s", serial, "shell"]
+    ime = subprocess.check_output(
+        shell + ["dumpsys input_method | grep 'mInputShown=' || true"], text=True, timeout=4,
+    )
+    keyboard_visible = bool(re.search(r"\bmInputShown=true\b", ime))
+    if keyboard_visible and (not ime_helper or not pointer_selection):
+        subprocess.run(shell + ["input", "keyevent", "KEYCODE_DPAD_CENTER"], check=True, timeout=4)
+        return
+    pos = query_pointer_position(serial, adb_path, shell_session)
+    if pos is None:
         print("Could not identify a single Android pointer position.", file=sys.stderr)
         return
-    # The dump reports the top-left of the cursor sprite. Aim at its hotspot.
-    x, y = (max(0, round(float(value)) + 7) for value in positions[0])
+    x, y = pos
+    if keyboard_visible:
+        # TV Gboard accepts center after input focus moves to the pointed key.
+        try:
+            result = subprocess.check_output(
+                shell + [f"CLASSPATH={IME_HELPER_DEVICE_PATH}", "app_process", "/", "ImeClick",
+                         str(x), str(y)], text=True, timeout=5,
+            ).strip().splitlines()
+            if result and result[-1] == "focused":
+                subprocess.run(shell + ["input", "keyevent", "KEYCODE_DPAD_CENTER"], check=True, timeout=4)
+            elif not result or result[-1] != "miss":
+                print("Android keyboard click unavailable. Use D-pad selection.", file=sys.stderr)
+        except (OSError, subprocess.SubprocessError):
+            print("Android keyboard click failed. Use D-pad selection.", file=sys.stderr)
+        return
     subprocess.run(shell + ["input", "touchscreen", "tap", str(x), str(y)], check=True, timeout=4)
 
 
@@ -340,12 +513,18 @@ def main():
         run_probe(args.adb_serial, descriptor, args.adb)
         return 0
 
+    ime_helper = args.tap_under_pointer and prepare_ime_helper(args.adb_serial, args.adb)
+    shell_session = PersistentShell(args.adb_serial, args.adb) if args.tap_under_pointer else None
+    ime_daemon = ImeDaemon(args.adb_serial, args.adb) if ime_helper else None
+    if ime_daemon is not None:
+        ime_daemon.start()
     remote = open_reader(args)
     stop_lease = threading.Event()
     if args.exclusive:
         threading.Thread(target=renew_input_lease, args=(remote, stop_lease), daemon=True).start()
     adb = None
     pressed = False
+    pointer_selection = True
     try:
         stream = messages(remote)
         status = next(stream, None)
@@ -362,14 +541,19 @@ def main():
         for message in stream:
             if "report" in message:
                 report = message["report"]
+                if report[1] or report[2]:
+                    pointer_selection = True
                 down = bool(report[0] & 1)
                 if args.tap_under_pointer:
                     report[0] &= ~1
                 write_hid(adb, {"id": 1, "command": "report", "report": report})
                 if args.tap_under_pointer and down and not pressed:
-                    tap_pointer(args.adb_serial, args.adb)
+                    tap_pointer(args.adb_serial, args.adb, ime_helper, pointer_selection,
+                                shell_session, ime_daemon)
                 pressed = down
             elif "android_key" in message:
+                if message["android_key"] in (19, 20, 21, 22):
+                    pointer_selection = False
                 subprocess.run([args.adb, "-s", args.adb_serial, "shell", "input", "keyevent",
                                 str(message["android_key"])], check=True, timeout=5)
                 print(f"Sent Android key {message['android_key']}.", flush=True)
@@ -386,6 +570,10 @@ def main():
         print("Stopping pointer bridge.", file=sys.stderr)
     finally:
         stop_lease.set()
+        if ime_daemon is not None:
+            ime_daemon.close()
+        if shell_session is not None:
+            shell_session.close()
         if adb is not None and adb.stdin and not adb.stdin.closed:
             adb.stdin.close()
         remote.terminate()
