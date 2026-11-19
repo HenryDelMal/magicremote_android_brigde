@@ -67,7 +67,28 @@ python3 /path/to/magic_remote_adb.py \
 
 If the ADB executable is on `PATH`, omit `--adb`. Use the webOS app ID for the HDMI input connected to the Chromecast. Press Ctrl+C in the LG shell to stop the bridge.
 
-### Computer bridge (optional)
+## LG Homebrew app
+
+**Magic Remote Bridge** gives you a TV screen for pairing, connection settings, status, and starting or stopping the TV-hosted bridge. The root-enabled Homebrew Channel must be installed.
+
+1. Set up the TV-hosted runtime as described above. The app expects `magic_remote_adb.py` and an executable ADB launcher named `tv-adb` in `/media/developer/magicremote-android-bridge/`.
+2. Copy `webos/control.py` into the same directory as `control.py`.
+3. Build the app with the [webOS CLI](https://webostv.developer.lge.com/develop/tools/cli-dev-guide) using `ares-package webos/app`. Install the resulting IPK on the TV with Homebrew or `ares-install`.
+4. Open **Magic Remote Bridge** from the LG home screen. Save the Chromecast's wireless debugging address and connection port, select the HDMI input, and press **Start bridge**. If the TV hasn't paired with the Chromecast yet, use **Pair Chromecast** with the separate pairing port and one-time code displayed by Android.
+5. Return to the selected HDMI input to use the remote with the Chromecast.
+
+## Use the remote
+
+- Move the Magic Remote to move the Android pointer.
+- Press center to tap the item at the pointer.
+- Use the direction buttons and Back for Android navigation.
+- Press Home to open Google TV Home.
+- Volume and Mute still control the LG TV. Channel Up and Down go to Google TV on the Chromecast HDMI input and work in apps that handle channel keys.
+- Press the LG Input or 123 button to return remote control to webOS. The bridge hands control back when the selected HDMI app is in the foreground. If the input chooser remains in front, dismiss it with Back. The bridge resumes control on the selected HDMI app.
+
+The bridge holds exclusive access to the LG remote input while the Chromecast HDMI app is active. If the bridge exits or stops renewing its input lease, the TV releases the remote.
+
+## Computer bridge (optional)
 
 The Mac must be on the same network as the LG TV and Chromecast. It runs the reader over SSH and uses its own paired ADB identity to control Android. No ADB executable is needed on the TV for this mode.
 
@@ -106,27 +127,6 @@ For an already enabled local Telnet service, replace the `--tv` option with:
 ```
 
 Keep the Mac connected to the TV and Chromecast while using the bridge. Press Ctrl+C in the terminal to stop it.
-
-## LG Homebrew app
-
-**Magic Remote Bridge** gives you a TV screen for pairing, connection settings, status, and starting or stopping the TV-hosted bridge. The root-enabled Homebrew Channel must be installed.
-
-1. Set up the TV-hosted runtime as described above. The app expects `magic_remote_adb.py` and an executable ADB launcher named `tv-adb` in `/media/developer/magicremote-android-bridge/`.
-2. Copy `webos/control.py` into the same directory as `control.py`.
-3. Build the app with the [webOS CLI](https://webostv.developer.lge.com/develop/tools/cli-dev-guide) using `ares-package webos/app`. Install the resulting IPK on the TV with Homebrew or `ares-install`.
-4. Open **Magic Remote Bridge** from the LG home screen. Save the Chromecast's wireless debugging address and connection port, select the HDMI input, and press **Start bridge**. If the TV hasn't paired with the Chromecast yet, use **Pair Chromecast** with the separate pairing port and one-time code displayed by Android.
-5. Return to the selected HDMI input to use the remote with the Chromecast.
-
-## Use the remote
-
-- Move the Magic Remote to move the Android pointer.
-- Press center to tap the item at the pointer.
-- Use the direction buttons and Back for Android navigation.
-- Press Home to open Google TV Home.
-- Volume and Mute still control the LG TV. Channel Up and Down go to Google TV on the Chromecast HDMI input and work in apps that handle channel keys.
-- Press the LG Input or 123 button to return remote control to webOS. The bridge hands control back when the selected HDMI app is in the foreground. If the input chooser remains in front, dismiss it with Back. The bridge resumes control on the selected HDMI app.
-
-The bridge holds exclusive access to the LG remote input while the Chromecast HDMI app is active. If the bridge exits or stops renewing its input lease, the TV releases the remote.
 
 ## Limitations
 
