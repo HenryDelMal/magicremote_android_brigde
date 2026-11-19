@@ -1,0 +1,14 @@
+{
+  "id": "io.github.henrydelmal.magicremotebridge",
+  "version": "0.1.1",
+  "vendor": "HenryDelMal",
+  "type": "web",
+  "main": "index.html",
+  "title": "Magic Remote Bridge",
+  "icon": "icon.png",
+  "largeIcon": "icon.png",
+  "requiredMemory": 64,
+  "resolution": "1920x1080",
+  "transparent": false,
+  "disableBackHistoryAPI": true
+}

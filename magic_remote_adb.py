@@ -6,6 +6,7 @@ import base64
 import json
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -55,6 +56,8 @@ lg_input=LG_INPUT
 # Linux evdev key codes mapped to Android key codes. This LG emits KEY_PREVIOUS
 # (412) for the Magic Remote's Back button.
 android_keys={28:23,103:19,105:21,106:22,108:20,158:4,174:4,272:23,352:23,412:4,773:3}
+channel_keys={402:166,403:167}
+volume_keys=(113,114,115)
 # LG's dedicated Input Source and 123/Screen Remote keys, respectively.
 handoff_keys=(241,994)
 grab_request=0x40044590
@@ -140,7 +143,18 @@ try:
      for value in (1,0):
       os.write(fd,struct.pack(fmt,0,0,1,code,value)+struct.pack(fmt,0,0,0,0,0))
     continue
-   if typ==3 and code in (0,1):
+   if typ==1 and (exclusive or grab_seconds) and code in volume_keys:
+    if val==1 or (val==2 and code!=113):
+     try:
+      subprocess.run(["luna-send","-n","1",
+       "luna://com.webos.service.networkinput/test/sendKeyCode",
+       json.dumps({"keyCode":code})],stdout=subprocess.DEVNULL,
+       stderr=subprocess.DEVNULL,timeout=1)
+     except (OSError,subprocess.SubprocessError):
+      pass
+   elif typ==1 and (exclusive or grab_seconds) and code in channel_keys:
+    if val in (1,2): print(json.dumps({"android_key":channel_keys[code]}),flush=True)
+   elif typ==3 and code in (0,1):
     if code==0: nx=val
     else: ny=val
     has=True
@@ -173,8 +187,8 @@ finally: os.close(fd)
 '''
 
 
-def adb_command(serial):
-    return ["adb", "-s", serial, "shell", "-T", "hid", "-"]
+def adb_command(serial, adb_path="adb"):
+    return [adb_path, "-s", serial, "shell", "-T", "hid", "-"]
 
 
 def write_hid(hid, message):
@@ -196,6 +210,18 @@ def open_reader(args):
     source = source.replace("TAP_MODE", repr(args.tap_under_pointer), 1)
     source = source.replace("EXCLUSIVE", repr(args.exclusive), 1)
     source = source.replace("LG_INPUT", repr(args.lg_input), 1)
+    if args.local_tv:
+        python = sys.executable or shutil.which("python3")
+        if not python:
+            raise RuntimeError("Cannot locate the TV's Python 3 executable")
+        return subprocess.Popen(
+            [python, "-u", "-c", source],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+
     payload = base64.b64encode(zlib.compress(source.encode())).decode()
     code = "import base64,zlib,sys;exec(zlib.decompress(base64.b64decode(sys.argv[1])))"
     script = None
@@ -238,8 +264,8 @@ def renew_input_lease(remote, stop):
             return
 
 
-def tap_pointer(serial):
-    shell = ["adb", "-s", serial, "shell"]
+def tap_pointer(serial, adb_path="adb"):
+    shell = [adb_path, "-s", serial, "shell"]
     dump = subprocess.check_output(shell + ["dumpsys", "SurfaceFlinger"], text=True, timeout=4)
     positions = re.findall(
         r"layerStack=\s*0[^\n]*?pos=\((-?[0-9.]+),\s*(-?[0-9.]+)\)[^\n]*\n"
@@ -254,8 +280,8 @@ def tap_pointer(serial):
     subprocess.run(shell + ["input", "touchscreen", "tap", str(x), str(y)], check=True, timeout=4)
 
 
-def run_probe(serial, descriptor):
-    hid = subprocess.Popen(adb_command(serial), stdin=subprocess.PIPE, text=True)
+def run_probe(serial, descriptor, adb_path="adb"):
+    hid = subprocess.Popen(adb_command(serial, adb_path), stdin=subprocess.PIPE, text=True)
     try:
         write_hid(hid, {"id": 1, "command": "register", "name": "Magic Remote Bridge",
                         "vid": 51966, "pid": 1, "bus": "usb", "descriptor": descriptor})
@@ -275,8 +301,13 @@ def run_probe(serial, descriptor):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adb-serial", required=True, help="Chromecast serial from adb devices")
+    parser.add_argument("--adb", default="adb", metavar="PATH",
+                        help="ADB executable available on the current host (default: adb)")
+    parser.add_argument("--pc-bridge", action="store_true",
+                        help="Run on a computer and read the TV over SSH or Telnet (default: run on the LG TV)")
     transport = parser.add_mutually_exclusive_group()
-    transport.add_argument("--tv", help="SSH destination or configured SSH alias")
+    transport.add_argument("--tv", help="LG TV SSH destination for PC bridge mode")
+    transport.add_argument("--local-tv", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--ssh-identity", help="SSH private key path")
     parser.add_argument("--ssh-port", type=int, help="SSH port")
     transport.add_argument("--telnet-host", help="Use the TV's existing Telnet shell on port 23")
@@ -292,8 +323,9 @@ def main():
                         help="Capture only this LG HDMI input and hand Input or 123 to webOS")
     parser.add_argument("--probe", action="store_true", help="Send synthetic mouse motion without connecting to the TV")
     args = parser.parse_args()
-    if not (args.probe or args.tv or args.telnet_host):
-        parser.error("Specify --tv or --telnet-host, or use --probe for an Android-only test")
+    if args.pc_bridge and not (args.tv or args.telnet_host):
+        parser.error("--pc-bridge requires --tv or --telnet-host")
+    args.local_tv = not (args.tv or args.telnet_host)
     if args.exclusive and args.grab_seconds:
         parser.error("--exclusive replaces --grab-seconds")
     if (args.native_keys or args.tap_under_pointer) and not (args.grab_seconds or args.exclusive):
@@ -305,7 +337,7 @@ def main():
     descriptor = HID_MOUSE_REPORT_MAP
 
     if args.probe:
-        run_probe(args.adb_serial, descriptor)
+        run_probe(args.adb_serial, descriptor, args.adb)
         return 0
 
     remote = open_reader(args)
@@ -323,7 +355,7 @@ def main():
         if "error" in status:
             raise RuntimeError(status["error"])
         print(f"Reading {status['ready']} on TV. Registering Chromecast mouse.", flush=True)
-        adb = subprocess.Popen(adb_command(args.adb_serial), stdin=subprocess.PIPE, text=True)
+        adb = subprocess.Popen(adb_command(args.adb_serial, args.adb), stdin=subprocess.PIPE, text=True)
         write_hid(adb, {"id": 1, "command": "register", "name": "Magic Remote Bridge",
                         "vid": 51966, "pid": 1, "bus": "usb", "descriptor": descriptor})
         time.sleep(1)
@@ -335,10 +367,10 @@ def main():
                     report[0] &= ~1
                 write_hid(adb, {"id": 1, "command": "report", "report": report})
                 if args.tap_under_pointer and down and not pressed:
-                    tap_pointer(args.adb_serial)
+                    tap_pointer(args.adb_serial, args.adb)
                 pressed = down
             elif "android_key" in message:
-                subprocess.run(["adb", "-s", args.adb_serial, "shell", "input", "keyevent",
+                subprocess.run([args.adb, "-s", args.adb_serial, "shell", "input", "keyevent",
                                 str(message["android_key"])], check=True, timeout=5)
                 print(f"Sent Android key {message['android_key']}.", flush=True)
             elif "error" in message:

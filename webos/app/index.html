@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101820">
+  <title>Magic Remote Bridge</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="screen">
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <h1>Magic Remote Bridge</h1>
+      <div id="connectionPill" class="connection-pill" aria-live="polite">
+        <span class="status-dot"></span><span id="connectionLabel">Checking connection</span>
+      </div>
+    </header>
+
+    <section class="hero" aria-labelledby="heroTitle">
+      <div class="hero-copy">
+        <h2 id="heroTitle">Bridge controls</h2>
+        <p id="statusMessage" class="status-message" aria-live="polite">Checking the bridge and Chromecast…</p>
+      </div>
+      <div class="hero-actions">
+        <button id="startButton" class="button button-primary" type="button">Start bridge</button>
+        <button id="stopButton" class="button button-secondary" type="button">Stop bridge</button>
+      </div>
+    </section>
+
+    <div class="content-grid">
+      <section class="panel connection-panel" aria-labelledby="connectionTitle">
+        <h2 id="connectionTitle">Chromecast connection</h2>
+        <p class="panel-description">Enter the Chromecast address and the LG HDMI input that it uses.</p>
+
+        <div class="field-grid">
+          <label class="field field-wide" for="hostField">
+            <span>Chromecast address</span>
+            <input id="hostField" name="host" type="text" inputmode="decimal" autocomplete="off" placeholder="192.0.2.10" maxlength="253">
+          </label>
+          <label class="field" for="portField">
+            <span>ADB connection port</span>
+            <input id="portField" name="port" type="text" inputmode="numeric" autocomplete="off" placeholder="ADB port" maxlength="5">
+          </label>
+          <label class="field" for="hdmiField">
+            <span>LG HDMI input</span>
+            <select id="hdmiField" name="hdmiApp">
+              <option value="com.webos.app.hdmi1">HDMI 1</option>
+              <option value="com.webos.app.hdmi2">HDMI 2</option>
+              <option value="com.webos.app.hdmi3">HDMI 3</option>
+              <option value="com.webos.app.hdmi4">HDMI 4</option>
+            </select>
+          </label>
+        </div>
+        <div class="panel-footer">
+          <p class="inline-feedback" id="configFeedback" aria-live="polite"></p>
+          <button id="saveButton" class="button button-outline" type="button">Save settings</button>
+        </div>
+      </section>
+
+      <section class="panel pairing-panel" aria-labelledby="pairingTitle">
+        <h2 id="pairingTitle">Pair Chromecast</h2>
+        <p class="panel-description">On Google TV, open Wireless debugging and choose “Pair device with pairing code.”</p>
+        <div class="field-grid pair-fields">
+          <label class="field" for="pairPortField">
+            <span>Pairing port</span>
+            <input id="pairPortField" name="pairingPort" type="text" inputmode="numeric" autocomplete="off" placeholder="Pairing port" maxlength="5">
+          </label>
+          <label class="field" for="pairCodeField">
+            <span>Six-digit pairing code</span>
+            <input id="pairCodeField" name="pairingCode" type="password" inputmode="numeric" autocomplete="off" placeholder="••••••" maxlength="6">
+          </label>
+        </div>
+        <div class="panel-footer pair-footer">
+          <p class="inline-feedback" id="pairFeedback" aria-live="polite">The code is used once and cleared after pairing.</p>
+          <button id="pairButton" class="button button-outline" type="button">Pair device</button>
+        </div>
+      </section>
+    </div>
+
+    <footer class="bottom-bar">
+      <div class="device-state">
+        <span id="deviceDot" class="device-dot"></span>
+        <span id="deviceLabel">Chromecast not connected</span>
+      </div>
+      <p class="remote-hint"><kbd>HOME</kbd> Google TV home <span aria-hidden="true">·</span> <kbd>123</kbd> Return to LG</p>
+      <p id="activityMessage" class="activity-message" aria-live="polite"></p>
+    </footer>
+  </main>
+  <script src="bridge-api.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
